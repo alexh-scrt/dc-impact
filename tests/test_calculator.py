@@ -11,10 +11,14 @@ Covers:
 - :class:`~dc_impact.calculator.ImpactResult` serialisation via ``to_dict``.
 - :func:`~dc_impact.calculator.get_available_hardware` and
   :func:`~dc_impact.calculator.get_available_regions` helpers.
+- PUE/WUE fallback behaviour for regions not in the lookup tables.
+- Private lookup helper functions.
+- Reference calculations against order-of-magnitude literature estimates.
 """
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -28,6 +32,10 @@ from dc_impact.calculator import (
     compute_water_liters,
     get_available_hardware,
     get_available_regions,
+    _lookup_pue,
+    _lookup_wue,
+    _lookup_hardware_tdp,
+    _lookup_carbon_intensity,
 )
 from dc_impact import data
 
@@ -70,7 +78,7 @@ class TestComputeEnergyKwh:
         assert scaled == pytest.approx(base * 1.2)
 
     def test_multiple_accelerators(self) -> None:
-        """8× A100s (400 W each) at 100 % for 72 h with PUE 1.2."""
+        """8x A100s (400 W each) at 100 % for 72 h with PUE 1.2."""
         result = compute_energy_kwh(
             tdp_watts=400.0,
             num_accelerators=8,
@@ -122,6 +130,47 @@ class TestComputeEnergyKwh:
         )
         assert isinstance(result, float)
         assert result > 0
+
+    def test_very_small_duration(self) -> None:
+        """Very small duration produces a very small but positive result."""
+        result = compute_energy_kwh(
+            tdp_watts=400.0,
+            num_accelerators=1,
+            utilization=1.0,
+            duration_hours=0.001,
+            pue=1.0,
+        )
+        assert result > 0
+        assert result < 1.0
+
+    def test_large_cluster(self) -> None:
+        """1024 GPUs at full power for 100 h should give a large but finite result."""
+        result = compute_energy_kwh(
+            tdp_watts=400.0,
+            num_accelerators=1024,
+            utilization=1.0,
+            duration_hours=100.0,
+            pue=1.2,
+        )
+        # 1024 * 400 / 1000 * 100 * 1.2 = 409.6 * 100 * 1.2 = 49152 kWh
+        assert result == pytest.approx(49152.0)
+
+    def test_formula_correctness(self) -> None:
+        """Verify formula: (tdp * n * util / 1000) * hours * pue."""
+        tdp = 300.0
+        n = 4
+        util = 0.75
+        hours = 12.0
+        pue = 1.15
+        expected = (tdp * n * util / 1000.0) * hours * pue
+        result = compute_energy_kwh(
+            tdp_watts=tdp,
+            num_accelerators=n,
+            utilization=util,
+            duration_hours=hours,
+            pue=pue,
+        )
+        assert result == pytest.approx(expected)
 
     # --- validation ---
 
@@ -225,6 +274,16 @@ class TestComputeEnergyKwh:
                 pue=0.99,
             )
 
+    def test_raises_on_pue_zero(self) -> None:
+        with pytest.raises(CalculatorError, match="pue"):
+            compute_energy_kwh(
+                tdp_watts=400.0,
+                num_accelerators=1,
+                utilization=1.0,
+                duration_hours=1.0,
+                pue=0.0,
+            )
+
     def test_pue_exactly_one_accepted(self) -> None:
         """PUE of exactly 1.0 is physically meaningful and must be accepted."""
         result = compute_energy_kwh(
@@ -246,6 +305,17 @@ class TestComputeEnergyKwh:
             pue=1.2,
         )
         assert result == pytest.approx(0.48)
+
+    def test_num_accelerators_one_accepted(self) -> None:
+        """num_accelerators=1 is the minimum valid value."""
+        result = compute_energy_kwh(
+            tdp_watts=100.0,
+            num_accelerators=1,
+            utilization=1.0,
+            duration_hours=1.0,
+            pue=1.0,
+        )
+        assert result == pytest.approx(0.1)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +374,25 @@ class TestComputeCo2eKg:
         )
         assert result >= 0
 
+    def test_formula_correctness(self) -> None:
+        """co2e_kg = energy_kwh * intensity_g_per_kwh / 1000."""
+        energy = 42.0
+        intensity = 337.0
+        expected = energy * intensity / 1000.0
+        result = compute_co2e_kg(
+            energy_kwh=energy,
+            carbon_intensity_g_per_kwh=intensity,
+        )
+        assert result == pytest.approx(expected)
+
+    def test_large_energy_value(self) -> None:
+        """Very large energy values should work without overflow."""
+        result = compute_co2e_kg(
+            energy_kwh=1_000_000.0,
+            carbon_intensity_g_per_kwh=500.0,
+        )
+        assert result == pytest.approx(500_000.0)
+
     # --- validation ---
 
     def test_raises_on_negative_energy(self) -> None:
@@ -359,6 +448,18 @@ class TestComputeWaterLiters:
         high = compute_water_liters(energy_kwh=100.0, wue=1.0)
         assert high == pytest.approx(low * 2)
 
+    def test_formula_correctness(self) -> None:
+        """water_liters = energy_kwh * wue."""
+        energy = 55.5
+        wue = 1.32
+        expected = energy * wue
+        result = compute_water_liters(energy_kwh=energy, wue=wue)
+        assert result == pytest.approx(expected)
+
+    def test_result_is_float(self) -> None:
+        result = compute_water_liters(energy_kwh=10.0, wue=0.5)
+        assert isinstance(result, float)
+
     # --- validation ---
 
     def test_raises_on_negative_energy(self) -> None:
@@ -379,7 +480,7 @@ class TestCalculateImpact:
     """End-to-end tests for the primary public API."""
 
     def test_basic_training_workload(self) -> None:
-        """8× A100_80GB for 72 h at 100 % in us-west-2 (Oregon, low-carbon)."""
+        """8x A100_80GB for 72 h at 100 % in us-west-2 (Oregon, low-carbon)."""
         result = calculate_impact(
             hardware="A100_80GB",
             region="us-west-2",
@@ -621,6 +722,94 @@ class TestCalculateImpact:
         )
         assert result.tdp_watts == pytest.approx(750.0)
 
+    def test_h100_pcie(self) -> None:
+        """H100 PCIe should use 350 W TDP."""
+        result = calculate_impact(
+            hardware="H100_PCIe",
+            region="europe-west4",
+            duration_hours=10.0,
+        )
+        assert result.tdp_watts == pytest.approx(350.0)
+        assert result.energy_kwh > 0
+
+    def test_gaudi2_hardware(self) -> None:
+        """Intel Gaudi 2 (600 W) should be correctly looked up."""
+        result = calculate_impact(
+            hardware="Gaudi2",
+            region="eastus",
+            duration_hours=5.0,
+            num_accelerators=2,
+        )
+        assert result.tdp_watts == pytest.approx(600.0)
+        assert result.num_accelerators == 2
+
+    def test_nordic_region_low_carbon_intensity(self) -> None:
+        """eu-north-1 (Stockholm) has near-zero carbon — very low CO2e."""
+        result = calculate_impact(
+            hardware="A100_80GB",
+            region="eu-north-1",
+            duration_hours=24.0,
+        )
+        assert result.carbon_intensity_g_per_kwh < 50.0
+        assert result.co2e_kg < result.energy_kwh  # very low CI ratio
+
+    def test_result_pue_is_float(self) -> None:
+        result = calculate_impact(
+            hardware="A100_80GB",
+            region="us-east-1",
+            duration_hours=1.0,
+        )
+        assert isinstance(result.pue, float)
+        assert result.pue >= 1.0
+
+    def test_result_wue_is_float(self) -> None:
+        result = calculate_impact(
+            hardware="A100_80GB",
+            region="us-east-1",
+            duration_hours=1.0,
+        )
+        assert isinstance(result.wue, float)
+        assert result.wue >= 0.0
+
+    def test_result_tdp_matches_data(self) -> None:
+        """tdp_watts in result must match the data table exactly."""
+        hw = "H100_SXM"
+        result = calculate_impact(
+            hardware=hw,
+            region="us-east-1",
+            duration_hours=1.0,
+        )
+        assert result.tdp_watts == pytest.approx(data.HARDWARE_TDP_WATTS[hw])
+
+    def test_utilization_half_halves_energy_vs_full(self) -> None:
+        """50% utilization gives exactly half the energy of 100%."""
+        full = calculate_impact(
+            hardware="A100_80GB",
+            region="us-east-1",
+            duration_hours=1.0,
+            utilization=1.0,
+        )
+        half = calculate_impact(
+            hardware="A100_80GB",
+            region="us-east-1",
+            duration_hours=1.0,
+            utilization=0.5,
+        )
+        assert half.energy_kwh == pytest.approx(full.energy_kwh / 2, rel=1e-9)
+
+    def test_co2e_and_water_derived_from_energy(self) -> None:
+        """CO2e and water should be derivable from the energy value and factors."""
+        result = calculate_impact(
+            hardware="V100_32GB",
+            region="eu-west-3",
+            duration_hours=6.0,
+            num_accelerators=2,
+        )
+        expected_co2e = result.energy_kwh * result.carbon_intensity_g_per_kwh / 1000.0
+        expected_water = result.energy_kwh * result.wue
+        assert result.co2e_kg == pytest.approx(expected_co2e, rel=1e-5)
+        assert result.water_liters == pytest.approx(expected_water, rel=1e-5)
+
 
 # ---------------------------------------------------------------------------
 # calculate_impact — input validation
@@ -654,11 +843,27 @@ class TestCalculateImpactValidation:
                 duration_hours=1.0,
             )
 
+    def test_whitespace_only_hardware_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="hardware"):
+            calculate_impact(
+                hardware="   ",
+                region="us-east-1",
+                duration_hours=1.0,
+            )
+
     def test_empty_region_raises(self) -> None:
         with pytest.raises(CalculatorError, match="region"):
             calculate_impact(
                 hardware="A100_80GB",
                 region="",
+                duration_hours=1.0,
+            )
+
+    def test_whitespace_only_region_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="region"):
+            calculate_impact(
+                hardware="A100_80GB",
+                region="  ",
                 duration_hours=1.0,
             )
 
@@ -714,6 +919,15 @@ class TestCalculateImpactValidation:
                 workload_type="fine-tuning",
             )
 
+    def test_workload_type_empty_string_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="workload_type"):
+            calculate_impact(
+                hardware="A100_80GB",
+                region="us-east-1",
+                duration_hours=1.0,
+                workload_type="",
+            )
+
     def test_zero_utilization_raises(self) -> None:
         with pytest.raises(CalculatorError, match="utilization"):
             calculate_impact(
@@ -730,6 +944,15 @@ class TestCalculateImpactValidation:
                 region="us-east-1",
                 duration_hours=1.0,
                 utilization=1.1,
+            )
+
+    def test_negative_utilization_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="utilization"):
+            calculate_impact(
+                hardware="A100_80GB",
+                region="us-east-1",
+                duration_hours=1.0,
+                utilization=-0.1,
             )
 
     def test_bool_duration_raises(self) -> None:
@@ -782,6 +1005,35 @@ class TestCalculateImpactValidation:
     def test_calculator_error_is_value_error_subclass(self) -> None:
         """CalculatorError must be a subclass of ValueError."""
         assert issubclass(CalculatorError, ValueError)
+
+    def test_calculator_error_can_be_caught_as_value_error(self) -> None:
+        """CalculatorError must be catchable as ValueError."""
+        caught = False
+        try:
+            calculate_impact(
+                hardware="FAKE",
+                region="us-east-1",
+                duration_hours=1.0,
+            )
+        except ValueError:
+            caught = True
+        assert caught
+
+    def test_none_hardware_raises(self) -> None:
+        with pytest.raises(CalculatorError):
+            calculate_impact(
+                hardware=None,  # type: ignore[arg-type]
+                region="us-east-1",
+                duration_hours=1.0,
+            )
+
+    def test_none_region_raises(self) -> None:
+        with pytest.raises(CalculatorError):
+            calculate_impact(
+                hardware="A100_80GB",
+                region=None,  # type: ignore[arg-type]
+                duration_hours=1.0,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -844,13 +1096,42 @@ class TestImpactResultToDict:
 
     def test_all_values_json_serialisable(self) -> None:
         """to_dict() output must be JSON-serialisable without custom encoders."""
-        import json
-
         d = self._make_result().to_dict()
         # This should not raise
         serialised = json.dumps(d)
         roundtripped = json.loads(serialised)
         assert roundtripped["hardware"] == "A100_80GB"
+
+    def test_to_dict_called_twice_returns_equal_dicts(self) -> None:
+        """to_dict() is deterministic — calling it twice gives identical results."""
+        result = self._make_result()
+        d1 = result.to_dict()
+        d2 = result.to_dict()
+        assert d1 == d2
+
+    def test_to_dict_hardware_is_string(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["hardware"], str)
+
+    def test_to_dict_region_is_string(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["region"], str)
+
+    def test_to_dict_num_accelerators_is_int(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["num_accelerators"], int)
+
+    def test_to_dict_energy_is_float(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["energy_kwh"], float)
+
+    def test_to_dict_co2e_is_float(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["co2e_kg"], float)
+
+    def test_to_dict_water_is_float(self) -> None:
+        d = self._make_result().to_dict()
+        assert isinstance(d["water_liters"], float)
 
 
 # ---------------------------------------------------------------------------
@@ -878,8 +1159,19 @@ class TestHelperListFunctions:
     def test_get_available_hardware_contains_h100(self) -> None:
         assert "H100_SXM" in get_available_hardware()
 
+    def test_get_available_hardware_contains_t4(self) -> None:
+        assert "T4" in get_available_hardware()
+
+    def test_get_available_hardware_contains_tpu_v4(self) -> None:
+        assert "TPU_v4" in get_available_hardware()
+
     def test_get_available_hardware_matches_data_keys(self) -> None:
         assert set(get_available_hardware()) == set(data.HARDWARE_TDP_WATTS.keys())
+
+    def test_get_available_hardware_all_strings(self) -> None:
+        for hw in get_available_hardware():
+            assert isinstance(hw, str)
+            assert len(hw) > 0
 
     def test_get_available_regions_returns_list(self) -> None:
         regions = get_available_regions()
@@ -895,10 +1187,26 @@ class TestHelperListFunctions:
     def test_get_available_regions_contains_us_east_1(self) -> None:
         assert "us-east-1" in get_available_regions()
 
+    def test_get_available_regions_contains_europe_west4(self) -> None:
+        assert "europe-west4" in get_available_regions()
+
     def test_get_available_regions_matches_data_keys(self) -> None:
         assert set(get_available_regions()) == set(
             data.CARBON_INTENSITY_G_PER_KWH.keys()
         )
+
+    def test_get_available_regions_all_strings(self) -> None:
+        for region in get_available_regions():
+            assert isinstance(region, str)
+            assert len(region) > 0
+
+    def test_get_available_hardware_minimum_count(self) -> None:
+        """We expect at least 20 hardware presets."""
+        assert len(get_available_hardware()) >= 20
+
+    def test_get_available_regions_minimum_count(self) -> None:
+        """We expect at least 40 regions."""
+        assert len(get_available_regions()) >= 40
 
 
 # ---------------------------------------------------------------------------
@@ -909,34 +1217,105 @@ class TestHelperListFunctions:
 class TestFallbackBehaviour:
     """Verify that regions without explicit PUE/WUE use the global defaults."""
 
-    def test_fallback_pue_applied_for_missing_region(self) -> None:
-        """A region in CI table but not in PUE table uses DEFAULT_PUE.
-
-        We add a synthetic region that only exists in the carbon intensity
-        table to confirm the fallback works — but since we cannot mutate
-        the immutable data tables directly in tests, we test via the
-        private lookup helper instead.
-        """
-        from dc_impact.calculator import _lookup_pue
-
-        # 'eu-west-3' IS in both tables, so verify value matches table
+    def test_fallback_pue_applied_for_known_region(self) -> None:
+        """A region in both tables returns its explicit PUE."""
         pue = _lookup_pue("eu-west-3")
-        # eu-west-3 is in PUE_BY_REGION
         expected = data.PUE_BY_REGION["eu-west-3"]
         assert pue == pytest.approx(expected)
 
     def test_default_pue_returned_for_unknown_key(self) -> None:
-        from dc_impact.calculator import _lookup_pue
-
-        # A key that is definitely not in PUE_BY_REGION
+        """A key not in PUE_BY_REGION should return DEFAULT_PUE."""
         pue = _lookup_pue("__synthetic_test_region__")
         assert pue == pytest.approx(data.DEFAULT_PUE)
 
     def test_default_wue_returned_for_unknown_key(self) -> None:
-        from dc_impact.calculator import _lookup_wue
-
+        """A key not in WUE_BY_REGION should return DEFAULT_WUE."""
         wue = _lookup_wue("__synthetic_test_region__")
         assert wue == pytest.approx(data.DEFAULT_WUE)
+
+    def test_default_pue_gte_one(self) -> None:
+        """DEFAULT_PUE must be physically meaningful (>= 1.0)."""
+        assert data.DEFAULT_PUE >= 1.0
+
+    def test_default_wue_non_negative(self) -> None:
+        """DEFAULT_WUE must be non-negative."""
+        assert data.DEFAULT_WUE >= 0.0
+
+    def test_lookup_pue_returns_float(self) -> None:
+        pue = _lookup_pue("us-east-1")
+        assert isinstance(pue, float)
+
+    def test_lookup_wue_returns_float(self) -> None:
+        wue = _lookup_wue("us-east-1")
+        assert isinstance(wue, float)
+
+    def test_all_known_regions_have_valid_pue(self) -> None:
+        """Every region in the carbon intensity table should return a PUE >= 1.0."""
+        for region in data.CARBON_INTENSITY_G_PER_KWH:
+            pue = _lookup_pue(region)
+            assert pue >= 1.0, f"PUE for {region!r} is {pue} (< 1.0)"
+
+    def test_all_known_regions_have_valid_wue(self) -> None:
+        """Every region in the carbon intensity table should return a WUE >= 0."""
+        for region in data.CARBON_INTENSITY_G_PER_KWH:
+            wue = _lookup_wue(region)
+            assert wue >= 0.0, f"WUE for {region!r} is {wue} (< 0)"
+
+
+# ---------------------------------------------------------------------------
+# Private lookup helpers — direct tests
+# ---------------------------------------------------------------------------
+
+
+class TestPrivateLookupHelpers:
+    """Direct tests for the private lookup functions."""
+
+    def test_lookup_hardware_tdp_known_key(self) -> None:
+        tdp = _lookup_hardware_tdp("A100_80GB")
+        assert tdp == pytest.approx(400.0)
+
+    def test_lookup_hardware_tdp_returns_float(self) -> None:
+        tdp = _lookup_hardware_tdp("T4")
+        assert isinstance(tdp, float)
+
+    def test_lookup_hardware_tdp_unknown_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="Unknown hardware"):
+            _lookup_hardware_tdp("NOT_A_REAL_GPU")
+
+    def test_lookup_hardware_tdp_error_lists_available(self) -> None:
+        with pytest.raises(CalculatorError, match="Available options"):
+            _lookup_hardware_tdp("NOT_A_REAL_GPU")
+
+    def test_lookup_carbon_intensity_known_key(self) -> None:
+        ci = _lookup_carbon_intensity("us-east-1")
+        assert ci == pytest.approx(415.0)
+
+    def test_lookup_carbon_intensity_returns_float(self) -> None:
+        ci = _lookup_carbon_intensity("eu-west-3")
+        assert isinstance(ci, float)
+
+    def test_lookup_carbon_intensity_unknown_raises(self) -> None:
+        with pytest.raises(CalculatorError, match="Unknown region"):
+            _lookup_carbon_intensity("not-a-real-region")
+
+    def test_lookup_carbon_intensity_error_lists_available(self) -> None:
+        with pytest.raises(CalculatorError, match="Available options"):
+            _lookup_carbon_intensity("not-a-real-region")
+
+    def test_lookup_pue_gcp_finland_very_low(self) -> None:
+        """Finland GCP campus (europe-north1) has very low PUE."""
+        pue = _lookup_pue("europe-north1")
+        assert pue < 1.10
+
+    def test_lookup_wue_oregon_low(self) -> None:
+        """Oregon (us-west-2) has low WUE due to mild climate."""
+        wue = _lookup_wue("us-west-2")
+        assert wue < 0.5
+
+    def test_lookup_wue_uae_high(self) -> None:
+        """UAE (uaenorth) has high WUE due to extreme heat."""
+        wue = _lookup_wue("uaenorth")
+        assert wue >= 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -966,8 +1345,7 @@ class TestReferenceCalculations:
             utilization=1.0,
         )
         # 1024 * 400 W * 816 h * 1.20 PUE / 1000 = 401,899 kWh ~= 402 MWh
-        # This is less than GPT-3's actual 1287 MWh because GPT-3 used
-        # more compute. We just check order of magnitude: > 100 MWh.
+        # We just check order of magnitude: > 100 MWh.
         assert result.energy_kwh > 100_000  # > 100 MWh
         assert result.energy_kwh < 10_000_000  # < 10 GWh (sanity cap)
 
@@ -981,6 +1359,48 @@ class TestReferenceCalculations:
             workload_type="inference",
             utilization=0.5,
         )
-        # 70 * 0.5 / 1000 * (1/60) * 1.09 ≈ 0.000636 kWh = 0.636 Wh
+        # 70 * 0.5 / 1000 * (1/60) * 1.09 ~= 0.000636 kWh = 0.636 Wh
         assert result.energy_kwh < 0.01  # less than 10 Wh
         assert result.co2e_kg < 0.01
+
+    def test_single_a100_single_hour_energy(self) -> None:
+        """Single A100 (400 W) at 100% for 1 hour in a region with PUE 1.20."""
+        result = calculate_impact(
+            hardware="A100_80GB",
+            region="us-east-1",  # PUE = 1.20
+            duration_hours=1.0,
+            num_accelerators=1,
+            utilization=1.0,
+        )
+        # 400 W * 1 / 1000 * 1 h * 1.20 = 0.48 kWh
+        assert result.energy_kwh == pytest.approx(0.48, rel=1e-4)
+
+    def test_carbon_order_of_magnitude_high_carbon_region(self) -> None:
+        """South Africa (928 gCO2/kWh) should produce >> Sweden (8 gCO2/kWh)."""
+        za = calculate_impact(
+            hardware="A100_80GB",
+            region="af-south-1",
+            duration_hours=1.0,
+        )
+        se = calculate_impact(
+            hardware="A100_80GB",
+            region="eu-north-1",
+            duration_hours=1.0,
+        )
+        # South Africa intensity (928) / Sweden intensity (8) ~= 116x
+        ratio = za.co2e_kg / se.co2e_kg
+        assert ratio > 50  # at least 50x more CO2 in South Africa
+
+    def test_water_hot_desert_vs_cold_nordic(self) -> None:
+        """UAE should use far more water per kWh than Nordic regions."""
+        uae = calculate_impact(
+            hardware="T4",
+            region="uaenorth",
+            duration_hours=10.0,
+        )
+        nordic = calculate_impact(
+            hardware="T4",
+            region="swedencentral",
+            duration_hours=10.0,
+        )
+        assert uae.water_liters > nordic.water_liters * 5
