@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DC Impact — AI Environmental Footprint Calculator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>🌍 DC Impact</h1>
+            <p class="tagline">Estimate the environmental footprint of your AI workload.</p>
+        </header>
+        <section class="form-section">
+            <form method="POST" action="/report" id="calculator-form">
+                <div class="form-group">
+                    <label for="hardware">Hardware Preset</label>
+                    <select id="hardware" name="hardware" required>
+                        <option value="">Select hardware…</option>
+                        <option value="A100_80GB">NVIDIA A100 80 GB (SXM)</option>
+                        <option value="A100_40GB">NVIDIA A100 40 GB</option>
+                        <option value="H100_SXM">NVIDIA H100 SXM</option>
+                        <option value="H100_PCIe">NVIDIA H100 PCIe</option>
+                        <option value="V100_32GB">NVIDIA V100 32 GB</option>
+                        <option value="V100_16GB">NVIDIA V100 16 GB</option>
+                        <option value="A10G">NVIDIA A10G</option>
+                        <option value="T4">NVIDIA T4</option>
+                        <option value="L4">NVIDIA L4</option>
+                        <option value="L40S">NVIDIA L40S</option>
+                        <option value="TPU_v4">Google TPU v4</option>
+                        <option value="TPU_v5e">Google TPU v5e</option>
+                        <option value="MI300X">AMD MI300X</option>
+                        <option value="MI250X">AMD MI250X</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="region">Cloud Region</label>
+                    <select id="region" name="region" required>
+                        <option value="">Select region…</option>
+                        <optgroup label="AWS">
+                            <option value="us-east-1">AWS us-east-1 (N. Virginia)</option>
+                            <option value="us-east-2">AWS us-east-2 (Ohio)</option>
+                            <option value="us-west-1">AWS us-west-1 (N. California)</option>
+                            <option value="us-west-2">AWS us-west-2 (Oregon)</option>
+                            <option value="eu-west-1">AWS eu-west-1 (Ireland)</option>
+                            <option value="eu-central-1">AWS eu-central-1 (Frankfurt)</option>
+                            <option value="ap-southeast-1">AWS ap-southeast-1 (Singapore)</option>
+                            <option value="ap-northeast-1">AWS ap-northeast-1 (Tokyo)</option>
+                        </optgroup>
+                        <optgroup label="GCP">
+                            <option value="us-central1">GCP us-central1 (Iowa)</option>
+                            <option value="us-east4">GCP us-east4 (N. Virginia)</option>
+                            <option value="europe-west1">GCP europe-west1 (Belgium)</option>
+                            <option value="europe-west4">GCP europe-west4 (Netherlands)</option>
+                            <option value="asia-east1">GCP asia-east1 (Taiwan)</option>
+                        </optgroup>
+                        <optgroup label="Azure">
+                            <option value="eastus">Azure East US</option>
+                            <option value="westus2">Azure West US 2</option>
+                            <option value="westeurope">Azure West Europe</option>
+                            <option value="northeurope">Azure North Europe</option>
+                        </optgroup>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="duration_hours">Duration (hours)</label>
+                        <input
+                            type="number"
+                            id="duration_hours"
+                            name="duration_hours"
+                            min="0.01"
+                            step="0.01"
+                            placeholder="e.g. 24"
+                            required
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="num_accelerators">Number of Accelerators</label>
+                        <input
+                            type="number"
+                            id="num_accelerators"
+                            name="num_accelerators"
+                            min="1"
+                            step="1"
+                            value="1"
+                            required
+                        />
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="workload_type">Workload Type</label>
+                        <select id="workload_type" name="workload_type" required>
+                            <option value="training">Training</option>
+                            <option value="inference">Inference</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="utilization">GPU Utilization (%)</label>
+                        <input
+                            type="number"
+                            id="utilization"
+                            name="utilization"
+                            min="1"
+                            max="100"
+                            step="1"
+                            value="100"
+                            required
+                        />
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary">Calculate Impact</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>
