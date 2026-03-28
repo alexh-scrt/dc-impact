@@ -8,118 +8,271 @@
 </head>
 <body>
     <main class="container">
-        <header>
-            <h1>🌍 DC Impact</h1>
-            <p class="tagline">Estimate the environmental footprint of your AI workload.</p>
+        <header class="site-header">
+            <h1 class="site-header__title">🌍 DC Impact</h1>
+            <p class="site-header__tagline">
+                Estimate the environmental footprint of your AI workload —
+                carbon, energy, and water.
+            </p>
         </header>
-        <section class="form-section">
-            <form method="POST" action="/report" id="calculator-form">
+
+        {% if error %}
+        <div class="alert alert--error" role="alert">
+            <span class="alert__icon" aria-hidden="true">⚠️</span>
+            <span class="alert__message">{{ error }}</span>
+        </div>
+        {% endif %}
+
+        <section class="form-section card">
+            <form method="POST" action="/report" id="calculator-form" novalidate>
+
                 <div class="form-group">
-                    <label for="hardware">Hardware Preset</label>
-                    <select id="hardware" name="hardware" required>
-                        <option value="">Select hardware…</option>
-                        <option value="A100_80GB">NVIDIA A100 80 GB (SXM)</option>
-                        <option value="A100_40GB">NVIDIA A100 40 GB</option>
-                        <option value="H100_SXM">NVIDIA H100 SXM</option>
-                        <option value="H100_PCIe">NVIDIA H100 PCIe</option>
-                        <option value="V100_32GB">NVIDIA V100 32 GB</option>
-                        <option value="V100_16GB">NVIDIA V100 16 GB</option>
-                        <option value="A10G">NVIDIA A10G</option>
-                        <option value="T4">NVIDIA T4</option>
-                        <option value="L4">NVIDIA L4</option>
-                        <option value="L40S">NVIDIA L40S</option>
-                        <option value="TPU_v4">Google TPU v4</option>
-                        <option value="TPU_v5e">Google TPU v5e</option>
-                        <option value="MI300X">AMD MI300X</option>
-                        <option value="MI250X">AMD MI250X</option>
+                    <label class="form-label" for="hardware">Hardware Preset</label>
+                    <select id="hardware" name="hardware" class="form-control" required>
+                        <option value=""
+                            {% if not form_values.get('hardware') %}selected{% endif %}
+                            disabled>Select hardware…</option>
+
+                        {% if hardware_by_vendor %}
+                            {% set vendor_labels = {
+                                'nvidia': 'NVIDIA GPUs',
+                                'amd':    'AMD GPUs',
+                                'google': 'Google TPUs',
+                                'intel':  'Intel Accelerators'
+                            } %}
+                            {% for vendor in ['nvidia', 'amd', 'google', 'intel'] %}
+                                {% if hardware_by_vendor.get(vendor) %}
+                                <optgroup label="{{ vendor_labels.get(vendor, vendor | capitalize) }}">
+                                    {% for hw in hardware_by_vendor[vendor] %}
+                                    <option value="{{ hw.key }}"
+                                        {% if form_values.get('hardware') == hw.key %}selected{% endif %}>
+                                        {{ hw.label }}
+                                    </option>
+                                    {% endfor %}
+                                </optgroup>
+                                {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            {# Fallback static list #}
+                            <optgroup label="NVIDIA GPUs">
+                                <option value="A100_80GB">NVIDIA A100 80 GB SXM4</option>
+                                <option value="A100_40GB">NVIDIA A100 40 GB SXM4</option>
+                                <option value="H100_SXM">NVIDIA H100 SXM5 (NVLink)</option>
+                                <option value="H100_PCIe">NVIDIA H100 PCIe</option>
+                                <option value="H200_SXM">NVIDIA H200 SXM5</option>
+                                <option value="GH200">NVIDIA GH200 Grace-Hopper</option>
+                                <option value="V100_32GB">NVIDIA V100 32 GB</option>
+                                <option value="V100_16GB">NVIDIA V100 16 GB</option>
+                                <option value="A40">NVIDIA A40</option>
+                                <option value="A10G">NVIDIA A10G (AWS)</option>
+                                <option value="A10">NVIDIA A10</option>
+                                <option value="T4">NVIDIA Tesla T4</option>
+                                <option value="L4">NVIDIA L4</option>
+                                <option value="L40S">NVIDIA L40S</option>
+                                <option value="L40">NVIDIA L40</option>
+                            </optgroup>
+                            <optgroup label="Google TPUs">
+                                <option value="TPU_v4">Google TPU v4</option>
+                                <option value="TPU_v5e">Google TPU v5e</option>
+                                <option value="TPU_v5p">Google TPU v5p</option>
+                                <option value="TPU_v3">Google TPU v3</option>
+                            </optgroup>
+                            <optgroup label="AMD GPUs">
+                                <option value="MI300X">AMD Instinct MI300X</option>
+                                <option value="MI250X">AMD Instinct MI250X</option>
+                                <option value="MI210">AMD Instinct MI210</option>
+                            </optgroup>
+                            <optgroup label="Intel Accelerators">
+                                <option value="Gaudi2">Intel Gaudi 2</option>
+                                <option value="Gaudi3">Intel Gaudi 3</option>
+                            </optgroup>
+                        {% endif %}
                     </select>
                 </div>
 
                 <div class="form-group">
-                    <label for="region">Cloud Region</label>
-                    <select id="region" name="region" required>
-                        <option value="">Select region…</option>
-                        <optgroup label="AWS">
-                            <option value="us-east-1">AWS us-east-1 (N. Virginia)</option>
-                            <option value="us-east-2">AWS us-east-2 (Ohio)</option>
-                            <option value="us-west-1">AWS us-west-1 (N. California)</option>
-                            <option value="us-west-2">AWS us-west-2 (Oregon)</option>
-                            <option value="eu-west-1">AWS eu-west-1 (Ireland)</option>
-                            <option value="eu-central-1">AWS eu-central-1 (Frankfurt)</option>
-                            <option value="ap-southeast-1">AWS ap-southeast-1 (Singapore)</option>
-                            <option value="ap-northeast-1">AWS ap-northeast-1 (Tokyo)</option>
-                        </optgroup>
-                        <optgroup label="GCP">
-                            <option value="us-central1">GCP us-central1 (Iowa)</option>
-                            <option value="us-east4">GCP us-east4 (N. Virginia)</option>
-                            <option value="europe-west1">GCP europe-west1 (Belgium)</option>
-                            <option value="europe-west4">GCP europe-west4 (Netherlands)</option>
-                            <option value="asia-east1">GCP asia-east1 (Taiwan)</option>
-                        </optgroup>
-                        <optgroup label="Azure">
-                            <option value="eastus">Azure East US</option>
-                            <option value="westus2">Azure West US 2</option>
-                            <option value="westeurope">Azure West Europe</option>
-                            <option value="northeurope">Azure North Europe</option>
-                        </optgroup>
+                    <label class="form-label" for="region">Cloud Region</label>
+                    <select id="region" name="region" class="form-control" required>
+                        <option value=""
+                            {% if not form_values.get('region') %}selected{% endif %}
+                            disabled>Select region…</option>
+
+                        {% if regions_by_provider %}
+                            {% set provider_labels = {
+                                'aws':   'Amazon Web Services (AWS)',
+                                'gcp':   'Google Cloud Platform (GCP)',
+                                'azure': 'Microsoft Azure'
+                            } %}
+                            {% for provider in ['aws', 'gcp', 'azure'] %}
+                                {% if regions_by_provider.get(provider) %}
+                                <optgroup label="{{ provider_labels.get(provider, provider | upper) }}">
+                                    {% for region in regions_by_provider[provider] %}
+                                    <option value="{{ region.key }}"
+                                        {% if form_values.get('region') == region.key %}selected{% endif %}>
+                                        {{ region.label }}
+                                    </option>
+                                    {% endfor %}
+                                </optgroup>
+                                {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            {# Fallback static list #}
+                            <optgroup label="Amazon Web Services (AWS)">
+                                <option value="us-east-1">AWS N. Virginia (us-east-1)</option>
+                                <option value="us-east-2">AWS Ohio (us-east-2)</option>
+                                <option value="us-west-1">AWS N. California (us-west-1)</option>
+                                <option value="us-west-2">AWS Oregon (us-west-2)</option>
+                                <option value="eu-west-1">AWS Ireland (eu-west-1)</option>
+                                <option value="eu-central-1">AWS Frankfurt (eu-central-1)</option>
+                                <option value="eu-north-1">AWS Stockholm (eu-north-1)</option>
+                                <option value="ap-southeast-1">AWS Singapore (ap-southeast-1)</option>
+                                <option value="ap-northeast-1">AWS Tokyo (ap-northeast-1)</option>
+                            </optgroup>
+                            <optgroup label="Google Cloud Platform (GCP)">
+                                <option value="us-central1">GCP Iowa (us-central1)</option>
+                                <option value="us-east4">GCP N. Virginia (us-east4)</option>
+                                <option value="europe-west1">GCP Belgium (europe-west1)</option>
+                                <option value="europe-west4">GCP Netherlands (europe-west4)</option>
+                                <option value="europe-north1">GCP Finland (europe-north1)</option>
+                                <option value="asia-east1">GCP Taiwan (asia-east1)</option>
+                            </optgroup>
+                            <optgroup label="Microsoft Azure">
+                                <option value="eastus">Azure East US</option>
+                                <option value="westus2">Azure West US 2</option>
+                                <option value="westeurope">Azure West Europe</option>
+                                <option value="northeurope">Azure North Europe</option>
+                                <option value="swedencentral">Azure Sweden Central</option>
+                            </optgroup>
+                        {% endif %}
                     </select>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="duration_hours">Duration (hours)</label>
+                        <label class="form-label" for="duration_hours">
+                            Duration (hours)
+                        </label>
                         <input
                             type="number"
                             id="duration_hours"
                             name="duration_hours"
+                            class="form-control"
                             min="0.01"
                             step="0.01"
                             placeholder="e.g. 24"
+                            value="{{ form_values.get('duration_hours', '') }}"
                             required
                         />
+                        <span class="form-hint">e.g. 1, 24, 168 (1 week)</span>
                     </div>
 
                     <div class="form-group">
-                        <label for="num_accelerators">Number of Accelerators</label>
+                        <label class="form-label" for="num_accelerators">
+                            Number of Accelerators
+                        </label>
                         <input
                             type="number"
                             id="num_accelerators"
                             name="num_accelerators"
+                            class="form-control"
                             min="1"
                             step="1"
-                            value="1"
+                            value="{{ form_values.get('num_accelerators', '1') }}"
                             required
                         />
+                        <span class="form-hint">GPUs or TPU chips in the run</span>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="workload_type">Workload Type</label>
-                        <select id="workload_type" name="workload_type" required>
-                            <option value="training">Training</option>
-                            <option value="inference">Inference</option>
+                        <label class="form-label" for="workload_type">Workload Type</label>
+                        <select id="workload_type" name="workload_type" class="form-control" required>
+                            <option value="training"
+                                {% if form_values.get('workload_type', 'training') == 'training' %}selected{% endif %}>
+                                Training
+                            </option>
+                            <option value="inference"
+                                {% if form_values.get('workload_type') == 'inference' %}selected{% endif %}>
+                                Inference
+                            </option>
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label for="utilization">GPU Utilization (%)</label>
+                        <label class="form-label" for="utilization">
+                            GPU Utilization (%)
+                        </label>
                         <input
                             type="number"
                             id="utilization"
                             name="utilization"
+                            class="form-control"
                             min="1"
                             max="100"
                             step="1"
-                            value="100"
+                            value="{{ form_values.get('utilization', '100') }}"
                             required
                         />
+                        <span class="form-hint">Typical: 80–100% training, 30–70% inference</span>
                     </div>
                 </div>
 
-                <button type="submit" class="btn-primary">Calculate Impact</button>
+                <button type="submit" class="btn btn--primary">
+                    ⚡ Calculate Environmental Impact
+                </button>
             </form>
         </section>
+
+        <section class="info-section">
+            <h2 class="info-section__title">How it works</h2>
+            <div class="info-grid">
+                <div class="info-card">
+                    <span class="info-card__icon" aria-hidden="true">🔌</span>
+                    <h3 class="info-card__title">Energy</h3>
+                    <p class="info-card__body">
+                        Hardware TDP × accelerators × utilization × PUE × duration
+                        gives total facility energy in kWh.
+                    </p>
+                </div>
+                <div class="info-card">
+                    <span class="info-card__icon" aria-hidden="true">💨</span>
+                    <h3 class="info-card__title">Carbon</h3>
+                    <p class="info-card__body">
+                        Energy × regional grid carbon intensity (gCO₂e/kWh)
+                        gives CO₂-equivalent emissions.
+                    </p>
+                </div>
+                <div class="info-card">
+                    <span class="info-card__icon" aria-hidden="true">💧</span>
+                    <h3 class="info-card__title">Water</h3>
+                    <p class="info-card__body">
+                        Energy × Water Usage Effectiveness (WUE in L/kWh)
+                        gives onsite cooling water consumption.
+                    </p>
+                </div>
+                <div class="info-card">
+                    <span class="info-card__icon" aria-hidden="true">🔗</span>
+                    <h3 class="info-card__title">API</h3>
+                    <p class="info-card__body">
+                        Use <code>POST /api/calculate</code> with JSON to integrate
+                        impact reporting into your training scripts or CI/CD pipelines.
+                    </p>
+                </div>
+            </div>
+        </section>
     </main>
+
+    <footer class="site-footer">
+        <p>
+            <a href="/api/hardware">Hardware presets</a> ·
+            <a href="/api/regions">Regions</a> ·
+            <a href="https://github.com/your-org/dc_impact" rel="noopener noreferrer" target="_blank">GitHub</a>
+        </p>
+        <p class="site-footer__disclaimer">
+            Estimates only — not suitable for regulatory compliance.
+            Data sourced from public vendor and grid operator disclosures.
+        </p>
+    </footer>
 </body>
 </html>

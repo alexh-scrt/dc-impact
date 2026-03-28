@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+        {% if result %}
+            DC Impact Report — {{ result.hardware }} / {{ result.region }}
+        {% else %}
+            DC Impact — Report Card
+        {% endif %}
+    </title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+    <main class="container">
+        <header class="site-header">
+            <h1 class="site-header__title">
+                <a href="/" class="site-header__home-link">🌍 DC Impact</a>
+            </h1>
+            <p class="site-header__tagline">Environmental Footprint Report</p>
+        </header>
+
+        {% if result %}
+        <div class="report-page__actions">
+            <a href="/" class="btn btn--secondary">← New Calculation</a>
+            {% set qs %}
+hardware={{ result.hardware }}&amp;region={{ result.region }}&amp;duration_hours={{ result.duration_hours }}&amp;num_accelerators={{ result.num_accelerators }}&amp;workload_type={{ result.workload_type }}&amp;utilization={{ (result.utilization * 100) | round(0) | int }}
+            {% endset %}
+            <a href="/report?{{ qs.strip() }}" class="btn btn--secondary">🔗 Shareable Link</a>
+        </div>
+
+        <div class="report-page__card-wrapper">
+            {{ html_card | safe }}
+        </div>
+
+        <section class="embed-section card">
+            <h2 class="embed-section__title">📋 Embed in README / Model Card</h2>
+            <p class="embed-section__desc">
+                Copy the JSON below into your Hugging Face model card or paste the
+                HTML snippet directly into a GitHub README.
+            </p>
+
+            <div class="embed-tabs">
+                <button class="embed-tab embed-tab--active" data-target="tab-json" type="button">
+                    JSON
+                </button>
+                <button class="embed-tab" data-target="tab-html" type="button">
+                    HTML Snippet
+                </button>
+                <button class="embed-tab" data-target="tab-api" type="button">
+                    API cURL
+                </button>
+            </div>
+
+            <div class="embed-panel" id="tab-json">
+                <pre class="code-block"><code>{{ report | tojson(indent=2) }}</code></pre>
+                <button class="btn btn--copy" data-clipboard-target="#tab-json code" type="button">
+                    Copy JSON
+                </button>
+            </div>
+
+            <div class="embed-panel embed-panel--hidden" id="tab-html">
+                <pre class="code-block"><code>{{ html_card | e }}</code></pre>
+                <button class="btn btn--copy" data-clipboard-target="#tab-html code" type="button">
+                    Copy HTML
+                </button>
+            </div>
+
+            <div class="embed-panel embed-panel--hidden" id="tab-api">
+                <pre class="code-block"><code>curl -X POST https://your-dc-impact-host/api/calculate \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "hardware": "{{ result.hardware }}",
+  "region": "{{ result.region }}",
+  "duration_hours": {{ result.duration_hours }},
+  "num_accelerators": {{ result.num_accelerators }},
+  "workload_type": "{{ result.workload_type }}",
+  "utilization": {{ result.utilization }}
+}'</code></pre>
+                <button class="btn btn--copy" data-clipboard-target="#tab-api code" type="button">
+                    Copy cURL
+                </button>
+            </div>
+        </section>
+
+        {% else %}
+        <div class="empty-state card">
+            <p class="empty-state__message">
+                No report data available.
+                <a href="/">Return to the calculator →</a>
+            </p>
+        </div>
+        {% endif %}
+    </main>
+
+    <footer class="site-footer">
+        <p>
+            <a href="/">Calculator</a> ·
+            <a href="/api/hardware">Hardware presets</a> ·
+            <a href="/api/regions">Regions</a> ·
+            <a href="https://github.com/your-org/dc_impact" rel="noopener noreferrer" target="_blank">GitHub</a>
+        </p>
+        <p class="site-footer__disclaimer">
+            Estimates only — not suitable for regulatory compliance.
+        </p>
+    </footer>
+
+    <script>
+    // Simple tab switcher
+    document.querySelectorAll('.embed-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            document.querySelectorAll('.embed-tab').forEach(function(t) {
+                t.classList.remove('embed-tab--active');
+            });
+            document.querySelectorAll('.embed-panel').forEach(function(p) {
+                p.classList.add('embed-panel--hidden');
+            });
+            tab.classList.add('embed-tab--active');
+            var target = document.getElementById(tab.dataset.target);
+            if (target) target.classList.remove('embed-panel--hidden');
+        });
+    });
+
+    // Copy-to-clipboard buttons
+    document.querySelectorAll('.btn--copy').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var selector = btn.dataset.clipboardTarget;
+            var el = document.querySelector(selector);
+            if (!el) return;
+            var text = el.textContent || el.innerText;
+            navigator.clipboard.writeText(text).then(function() {
+                var original = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(function() { btn.textContent = original; }, 2000);
+            }).catch(function() {
+                // Fallback for older browsers
+                var range = document.createRange();
+                range.selectNode(el);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+                document.execCommand('copy');
+                window.getSelection().removeAllRanges();
+            });
+        });
+    });
+    </script>
+</body>
+</html>

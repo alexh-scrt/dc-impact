@@ -10,6 +10,10 @@ Typical usage::
 
     app = create_app()
     app.run()
+
+Or via the console script::
+
+    dc_impact
 """
 
 from dc_impact.app import create_app
